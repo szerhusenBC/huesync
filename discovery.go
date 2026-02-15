@@ -47,6 +47,9 @@ func DiscoverBridges(ctx context.Context) (<-chan Bridge, <-chan error) {
 		go func() {
 			for entry := range entries {
 				b := parseBridge(entry)
+				if b.IP == nil {
+					continue
+				}
 				if b.ID != "" && seen[b.ID] {
 					continue
 				}

@@ -52,7 +52,7 @@ func LoadCredentials(bridgeID string) (BridgeCredentials, bool, error) {
 		if os.IsNotExist(err) {
 			return BridgeCredentials{}, false, nil
 		}
-		return BridgeCredentials{}, false, nil
+		return BridgeCredentials{}, false, err
 	}
 
 	bc, ok := creds[bridgeID]

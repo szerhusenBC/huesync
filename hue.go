@@ -92,6 +92,9 @@ func FetchEntertainmentAreas(ip net.IP, username string) ([]EntertainmentArea, e
 	if resp.StatusCode == 403 {
 		return nil, ErrUnauthorized
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetching entertainment areas: HTTP %d", resp.StatusCode)
+	}
 
 	var result entertainmentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -101,11 +104,7 @@ func FetchEntertainmentAreas(ip net.IP, username string) ([]EntertainmentArea, e
 	areas := make([]EntertainmentArea, len(result.Data))
 	for i, d := range result.Data {
 		channelIDs := make([]uint8, len(d.Channels))
-		for j, raw := range d.Channels {
-			var ch channelData
-			if err := json.Unmarshal(raw, &ch); err != nil {
-				return nil, fmt.Errorf("decoding channel %d: %w", j, err)
-			}
+		for j, ch := range d.Channels {
 			channelIDs[j] = ch.ChannelID
 		}
 		areas[i] = EntertainmentArea{
@@ -151,12 +150,12 @@ type entertainmentResponse struct {
 }
 
 type entertainmentData struct {
-	ID                string              `json:"id"`
-	Metadata          entertainmentMeta   `json:"metadata"`
-	ConfigurationType string              `json:"configuration_type"`
-	Status            string              `json:"status"`
-	Channels          []json.RawMessage   `json:"channels"`
-	LightServices     []json.RawMessage   `json:"light_services"`
+	ID                string            `json:"id"`
+	Metadata          entertainmentMeta `json:"metadata"`
+	ConfigurationType string            `json:"configuration_type"`
+	Status            string            `json:"status"`
+	Channels          []channelData     `json:"channels"`
+	LightServices     []json.RawMessage `json:"light_services"`
 }
 
 type entertainmentMeta struct {

@@ -29,8 +29,9 @@ func ActivateArea(ip net.IP, username, areaID string) error {
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("activate area: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("activate area: HTTP %d: %s", resp.StatusCode, respBody)
 	}
 	return nil
 }
@@ -51,8 +52,9 @@ func DeactivateArea(ip net.IP, username, areaID string) error {
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("deactivate area: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("deactivate area: HTTP %d: %s", resp.StatusCode, respBody)
 	}
 	return nil
 }

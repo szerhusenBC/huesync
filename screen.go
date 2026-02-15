@@ -33,7 +33,9 @@ func CaptureScreen() (*image.RGBA, error) {
 // AverageColor computes the mean RGB of an RGBA image.
 // It samples every Nth pixel to keep computation fast on large displays.
 func AverageColor(img *image.RGBA) RGB {
-	pixels := img.Rect.Dx() * img.Rect.Dy()
+	w := img.Rect.Dx()
+	h := img.Rect.Dy()
+	pixels := w * h
 	if pixels == 0 {
 		return RGB{}
 	}
@@ -48,8 +50,9 @@ func AverageColor(img *image.RGBA) RGB {
 	var count uint64
 
 	pix := img.Pix
+	stride := img.Stride
 	for i := 0; i < pixels; i += step {
-		off := i * 4
+		off := (i/w)*stride + (i%w)*4
 		rSum += uint64(pix[off])
 		gSum += uint64(pix[off+1])
 		bSum += uint64(pix[off+2])
