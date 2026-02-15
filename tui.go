@@ -81,10 +81,9 @@ type model struct {
 	areaCursor   int
 	selectedArea *EntertainmentArea
 
-	streamer   *Streamer
-	lastColor  RGB
-	frameCount int
-	streamErr  error
+	streamer  *Streamer
+	lastColor RGB
+	streamErr error
 }
 
 var (
@@ -316,7 +315,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamErr = msg.err
 		} else {
 			m.lastColor = msg.color
-			m.frameCount++
 			m.streamErr = nil
 		}
 		return m, streamTickCmd()
