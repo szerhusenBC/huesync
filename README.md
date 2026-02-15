@@ -21,13 +21,13 @@ huesync continuously captures your screen, calculates the average color, and str
 ## Install
 
 ```sh
-go install github.com/stepzerhusen/huesync@latest
+go install github.com/szerhusenBC/huesync@latest
 ```
 
 Or build from source:
 
 ```sh
-git clone https://github.com/stepzerhusen/huesync.git
+git clone https://github.com/szerhusenBC/huesync.git
 cd huesync
 go build .
 ```
