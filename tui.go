@@ -456,7 +456,6 @@ func (m model) View() string {
 		s += fmt.Sprintf("  Bridge: %s\n", m.selected)
 		s += fmt.Sprintf("  Area:   %s\n", m.selectedArea)
 		s += fmt.Sprintf("  Color:  %s\n", m.lastColor)
-		s += fmt.Sprintf("  Frames: %d\n", m.frameCount)
 		if m.streamErr != nil {
 			s += errStyle.Render(fmt.Sprintf("  Error:  %s", m.streamErr)) + "\n"
 		}
