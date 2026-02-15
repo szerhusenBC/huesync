@@ -60,8 +60,9 @@ type connectResultMsg struct {
 type streamTickMsg struct{}
 
 type frameSentMsg struct {
-	color RGB
-	err   error
+	color     RGB
+	err       error
+	startedAt time.Time
 }
 
 type stopDoneMsg struct {
@@ -163,13 +164,14 @@ func connectCmd(ip net.IP, username, clientkey, areaID string, channelIDs []uint
 
 func captureAndSendCmd(s *Streamer) tea.Cmd {
 	return func() tea.Msg {
+		start := time.Now()
 		img, err := CaptureScreen()
 		if err != nil {
-			return frameSentMsg{err: err}
+			return frameSentMsg{err: err, startedAt: start}
 		}
 		color := AverageColor(img)
 		err = s.SendColor(color)
-		return frameSentMsg{color: color, err: err}
+		return frameSentMsg{color: color, err: err, startedAt: start}
 	}
 }
 
@@ -328,7 +330,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastColor = msg.color
 			m.streamErr = nil
 		}
-		return m, streamTickCmd(m.captureDelay)
+		remaining := m.captureDelay - time.Since(msg.startedAt)
+		if remaining < 0 {
+			remaining = 0
+		}
+		return m, streamTickCmd(remaining)
 
 	case streamTickMsg:
 		if m.state == stateStreaming {
