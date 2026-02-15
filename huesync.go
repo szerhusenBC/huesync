@@ -19,7 +19,10 @@ func main() {
 	if m.err != nil {
 		os.Exit(1)
 	}
-	if m.selected == nil {
+	if m.selected == nil || m.selectedArea == nil {
 		os.Exit(0)
 	}
+
+	_ = m.username
+	_ = m.clientkey
 }

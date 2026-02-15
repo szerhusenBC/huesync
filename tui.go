@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -15,14 +17,29 @@ const scanTimeout = 5 * time.Second
 type state int
 
 const (
-	stateScanning  state = iota
+	stateScanning      state = iota
 	stateSelecting
+	statePairing
+	statePairingWait
+	stateFetchingAreas
+	stateSelectingArea
 	stateDone
 )
 
 type scanDoneMsg struct {
 	bridges []Bridge
 	err     error
+}
+
+type pairResultMsg struct {
+	username  string
+	clientkey string
+	err       error
+}
+
+type areasFetchedMsg struct {
+	areas []EntertainmentArea
+	err   error
 }
 
 type model struct {
@@ -32,6 +49,13 @@ type model struct {
 	cursor   int
 	selected *Bridge
 	err      error
+
+	username     string
+	clientkey    string
+	pairErr      string
+	areas        []EntertainmentArea
+	areaCursor   int
+	selectedArea *EntertainmentArea
 }
 
 var (
@@ -76,6 +100,20 @@ func scanCmd() tea.Cmd {
 	}
 }
 
+func pairCmd(ip net.IP) tea.Cmd {
+	return func() tea.Msg {
+		username, clientkey, err := PairBridge(ip)
+		return pairResultMsg{username: username, clientkey: clientkey, err: err}
+	}
+}
+
+func fetchAreasCmd(ip net.IP, username string) tea.Cmd {
+	return func() tea.Msg {
+		areas, err := FetchEntertainmentAreas(ip, username)
+		return areasFetchedMsg{areas: areas, err: err}
+	}
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -104,18 +142,58 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if len(msg.bridges) == 1 {
 			m.selected = &msg.bridges[0]
-			m.state = stateDone
-			return m, tea.Quit
+			m.state = statePairing
+			return m, nil
 		}
 
 		m.bridges = msg.bridges
 		m.state = stateSelecting
 		return m, nil
+
+	case pairResultMsg:
+		if msg.err != nil {
+			if errors.Is(msg.err, ErrLinkButtonNotPressed) {
+				m.pairErr = "Link button not pressed."
+				m.state = statePairing
+				return m, nil
+			}
+			m.err = fmt.Errorf("pairing failed: %w", msg.err)
+			m.state = stateDone
+			return m, tea.Quit
+		}
+		m.username = msg.username
+		m.clientkey = msg.clientkey
+		m.pairErr = ""
+		m.state = stateFetchingAreas
+		return m, fetchAreasCmd(m.selected.IP, m.username)
+
+	case areasFetchedMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("fetching entertainment areas: %w", msg.err)
+			m.state = stateDone
+			return m, tea.Quit
+		}
+
+		if len(msg.areas) == 0 {
+			m.err = fmt.Errorf("no entertainment areas configured on this bridge")
+			m.state = stateDone
+			return m, tea.Quit
+		}
+
+		if len(msg.areas) == 1 {
+			m.selectedArea = &msg.areas[0]
+			m.state = stateDone
+			return m, tea.Quit
+		}
+
+		m.areas = msg.areas
+		m.state = stateSelectingArea
+		return m, nil
 	}
 
-	if m.state == stateSelecting {
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
+	switch m.state {
+	case stateSelecting:
+		if msg, ok := msg.(tea.KeyMsg); ok {
 			switch msg.String() {
 			case "up", "k":
 				if m.cursor > 0 {
@@ -127,6 +205,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "enter":
 				m.selected = &m.bridges[m.cursor]
+				m.state = statePairing
+			}
+		}
+
+	case statePairing:
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			switch msg.String() {
+			case "enter":
+				m.state = statePairingWait
+				return m, pairCmd(m.selected.IP)
+			}
+		}
+
+	case stateSelectingArea:
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			switch msg.String() {
+			case "up", "k":
+				if m.areaCursor > 0 {
+					m.areaCursor--
+				}
+			case "down", "j":
+				if m.areaCursor < len(m.areas)-1 {
+					m.areaCursor++
+				}
+			case "enter":
+				m.selectedArea = &m.areas[m.areaCursor]
 				m.state = stateDone
 				return m, tea.Quit
 			}
@@ -156,12 +260,51 @@ func (m model) View() string {
 		s += "\n" + helpStyle.Render("  ↑/k up · ↓/j down · enter select · q quit") + "\n"
 		return s
 
+	case statePairing:
+		s := "\n"
+		if m.pairErr != "" {
+			s += errStyle.Render("  "+m.pairErr) + "\n\n"
+		}
+		s += titleStyle.Render("  Press the link button on your Hue bridge, then press Enter.") + "\n\n"
+		s += helpStyle.Render("  enter pair · q quit") + "\n"
+		return s
+
+	case statePairingWait:
+		return fmt.Sprintf("\n %s %s\n\n",
+			m.spinner.View(),
+			titleStyle.Render("Pairing with bridge..."))
+
+	case stateFetchingAreas:
+		return fmt.Sprintf("\n %s %s\n\n",
+			m.spinner.View(),
+			titleStyle.Render("Fetching entertainment areas..."))
+
+	case stateSelectingArea:
+		s := "\n" + titleStyle.Render("  Select an Entertainment Area:") + "\n\n"
+		for i, a := range m.areas {
+			label := a.String()
+			if i == m.areaCursor {
+				s += selectedStyle.Render("▸ "+label) + "\n"
+			} else {
+				s += itemStyle.Render(label) + "\n"
+			}
+		}
+		s += "\n" + helpStyle.Render("  ↑/k up · ↓/j down · enter select · q quit") + "\n"
+		return s
+
 	case stateDone:
 		if m.err != nil {
 			return "\n" + errStyle.Render("  Error: "+m.err.Error()) + "\n\n"
 		}
+		var s string
 		if m.selected != nil {
-			return fmt.Sprintf("\n  Selected bridge: %s\n\n", m.selected)
+			s += fmt.Sprintf("\n  Bridge: %s\n", m.selected)
+		}
+		if m.selectedArea != nil {
+			s += fmt.Sprintf("  Area:   %s\n", m.selectedArea)
+		}
+		if s != "" {
+			return s + "\n"
 		}
 	}
 
