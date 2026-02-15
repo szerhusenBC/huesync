@@ -48,6 +48,18 @@ The TUI will guide you through:
 
 Press `q` to stop streaming and exit.
 
+## Makefile
+
+A Makefile is provided for common tasks:
+
+| Target       | Description                        |
+|--------------|------------------------------------|
+| `make build` | Build the application              |
+| `make run`   | Run the application                |
+| `make test`  | Run all tests                      |
+| `make vet`   | Run `go vet`                       |
+| `make deps`  | Download Go module dependencies    |
+
 ## How it works
 
 1. The primary display is captured at the configured interval
