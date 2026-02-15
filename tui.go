@@ -142,6 +142,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if len(msg.bridges) == 1 {
 			m.selected = &msg.bridges[0]
+			if creds, found, _ := LoadCredentials(m.selected.ID); found {
+				m.username = creds.Username
+				m.clientkey = creds.Clientkey
+				m.state = stateFetchingAreas
+				return m, fetchAreasCmd(m.selected.IP, m.username)
+			}
 			m.state = statePairing
 			return m, nil
 		}
@@ -164,11 +170,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.username = msg.username
 		m.clientkey = msg.clientkey
 		m.pairErr = ""
+		_ = SaveCredentials(m.selected.ID, BridgeCredentials{
+			Username:  msg.username,
+			Clientkey: msg.clientkey,
+		})
 		m.state = stateFetchingAreas
 		return m, fetchAreasCmd(m.selected.IP, m.username)
 
 	case areasFetchedMsg:
 		if msg.err != nil {
+			if errors.Is(msg.err, ErrUnauthorized) {
+				_ = DeleteCredentials(m.selected.ID)
+				m.username = ""
+				m.clientkey = ""
+				m.pairErr = "Stored credentials were rejected by the bridge."
+				m.state = statePairing
+				return m, nil
+			}
 			m.err = fmt.Errorf("fetching entertainment areas: %w", msg.err)
 			m.state = stateDone
 			return m, tea.Quit
@@ -205,6 +223,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "enter":
 				m.selected = &m.bridges[m.cursor]
+				if creds, found, _ := LoadCredentials(m.selected.ID); found {
+					m.username = creds.Username
+					m.clientkey = creds.Clientkey
+					m.state = stateFetchingAreas
+					return m, fetchAreasCmd(m.selected.IP, m.username)
+				}
 				m.state = statePairing
 			}
 		}

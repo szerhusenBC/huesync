@@ -20,6 +20,9 @@ var hueClient = &http.Client{
 // pressed the link button on the Hue bridge.
 var ErrLinkButtonNotPressed = errors.New("link button not pressed")
 
+// ErrUnauthorized is returned when the bridge rejects the API credentials.
+var ErrUnauthorized = errors.New("unauthorized")
+
 // PairBridge registers a new application with the Hue bridge at the given IP.
 // The user must press the link button on the bridge before calling this.
 func PairBridge(ip net.IP) (username, clientkey string, err error) {
@@ -85,6 +88,10 @@ func FetchEntertainmentAreas(ip net.IP, username string) ([]EntertainmentArea, e
 		return nil, fmt.Errorf("fetching entertainment areas: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == 403 {
+		return nil, ErrUnauthorized
+	}
 
 	var result entertainmentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
