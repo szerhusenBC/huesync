@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -23,6 +24,7 @@ const (
 	statePairingWait
 	stateFetchingAreas
 	stateSelectingArea
+	stateInputDelay
 	stateActivating
 	stateConnecting
 	stateStreaming
@@ -80,6 +82,9 @@ type model struct {
 	areas        []EntertainmentArea
 	areaCursor   int
 	selectedArea *EntertainmentArea
+
+	delayInput   string
+	captureDelay time.Duration
 
 	streamer  *Streamer
 	lastColor RGB
@@ -168,8 +173,8 @@ func captureAndSendCmd(s *Streamer) tea.Cmd {
 	}
 }
 
-func streamTickCmd() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
+func streamTickCmd(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg {
 		return streamTickMsg{}
 	})
 }
@@ -192,6 +197,12 @@ func stopCmd(s *Streamer, ip net.IP, username, areaID string) tea.Cmd {
 func (m model) startStreaming() (model, tea.Cmd) {
 	m.state = stateActivating
 	return m, activateCmd(m.selected.IP, m.username, m.selectedArea.ID)
+}
+
+func (m model) enterDelayInput() (model, tea.Cmd) {
+	m.delayInput = "100"
+	m.state = stateInputDelay
+	return m, nil
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -284,7 +295,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if len(msg.areas) == 1 {
 			m.selectedArea = &msg.areas[0]
-			return m.startStreaming()
+			return m.enterDelayInput()
 		}
 
 		m.areas = msg.areas
@@ -317,7 +328,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastColor = msg.color
 			m.streamErr = nil
 		}
-		return m, streamTickCmd()
+		return m, streamTickCmd(m.captureDelay)
 
 	case streamTickMsg:
 		if m.state == stateStreaming {
@@ -379,6 +390,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "enter":
 				m.selectedArea = &m.areas[m.areaCursor]
+				return m.enterDelayInput()
+			}
+		}
+
+	case stateInputDelay:
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			switch msg.String() {
+			case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+				m.delayInput += msg.String()
+			case "backspace":
+				if len(m.delayInput) > 0 {
+					m.delayInput = m.delayInput[:len(m.delayInput)-1]
+				}
+			case "enter":
+				ms, err := strconv.Atoi(m.delayInput)
+				if err != nil || ms <= 0 {
+					ms = 100
+				}
+				m.captureDelay = time.Duration(ms) * time.Millisecond
 				return m.startStreaming()
 			}
 		}
@@ -439,6 +469,12 @@ func (m model) View() string {
 		s += "\n" + helpStyle.Render("  ↑/k up · ↓/j down · enter select · q quit") + "\n"
 		return s
 
+	case stateInputDelay:
+		s := "\n" + titleStyle.Render("  Capture delay (ms):") + "\n\n"
+		s += fmt.Sprintf("  > %s\n", m.delayInput)
+		s += "\n" + helpStyle.Render("  type a number · enter confirm · q quit") + "\n"
+		return s
+
 	case stateActivating:
 		return fmt.Sprintf("\n %s %s\n\n",
 			m.spinner.View(),
@@ -453,6 +489,7 @@ func (m model) View() string {
 		s := "\n" + titleStyle.Render("  Streaming") + "\n\n"
 		s += fmt.Sprintf("  Bridge: %s\n", m.selected)
 		s += fmt.Sprintf("  Area:   %s\n", m.selectedArea)
+		s += fmt.Sprintf("  Delay:  %dms\n", m.captureDelay.Milliseconds())
 		s += fmt.Sprintf("  Color:  %s\n", m.lastColor)
 		if m.streamErr != nil {
 			s += errStyle.Render(fmt.Sprintf("  Error:  %s", m.streamErr)) + "\n"
