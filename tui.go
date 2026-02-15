@@ -23,6 +23,10 @@ const (
 	statePairingWait
 	stateFetchingAreas
 	stateSelectingArea
+	stateActivating
+	stateConnecting
+	stateStreaming
+	stateStopping
 	stateDone
 )
 
@@ -42,6 +46,26 @@ type areasFetchedMsg struct {
 	err   error
 }
 
+type activateResultMsg struct {
+	err error
+}
+
+type connectResultMsg struct {
+	streamer *Streamer
+	err      error
+}
+
+type streamTickMsg struct{}
+
+type frameSentMsg struct {
+	color RGB
+	err   error
+}
+
+type stopDoneMsg struct {
+	err error
+}
+
 type model struct {
 	state    state
 	spinner  spinner.Model
@@ -56,6 +80,11 @@ type model struct {
 	areas        []EntertainmentArea
 	areaCursor   int
 	selectedArea *EntertainmentArea
+
+	streamer   *Streamer
+	lastColor  RGB
+	frameCount int
+	streamErr  error
 }
 
 var (
@@ -114,11 +143,67 @@ func fetchAreasCmd(ip net.IP, username string) tea.Cmd {
 	}
 }
 
+func activateCmd(ip net.IP, username, areaID string) tea.Cmd {
+	return func() tea.Msg {
+		err := ActivateArea(ip, username, areaID)
+		return activateResultMsg{err: err}
+	}
+}
+
+func connectCmd(ip net.IP, username, clientkey, areaID string, channelIDs []uint8) tea.Cmd {
+	return func() tea.Msg {
+		streamer, err := NewStreamer(ip, username, clientkey, areaID, channelIDs)
+		return connectResultMsg{streamer: streamer, err: err}
+	}
+}
+
+func captureAndSendCmd(s *Streamer) tea.Cmd {
+	return func() tea.Msg {
+		img, err := CaptureScreen()
+		if err != nil {
+			return frameSentMsg{err: err}
+		}
+		color := AverageColor(img)
+		err = s.SendColor(color)
+		return frameSentMsg{color: color, err: err}
+	}
+}
+
+func streamTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return streamTickMsg{}
+	})
+}
+
+func stopCmd(s *Streamer, ip net.IP, username, areaID string) tea.Cmd {
+	return func() tea.Msg {
+		var firstErr error
+		if s != nil {
+			if err := s.Close(); err != nil {
+				firstErr = err
+			}
+		}
+		if err := DeactivateArea(ip, username, areaID); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		return stopDoneMsg{err: firstErr}
+	}
+}
+
+func (m model) startStreaming() (model, tea.Cmd) {
+	m.state = stateActivating
+	return m, activateCmd(m.selected.IP, m.username, m.selectedArea.ID)
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			if m.state == stateStreaming {
+				m.state = stateStopping
+				return m, stopCmd(m.streamer, m.selected.IP, m.username, m.selectedArea.ID)
+			}
 			return m, tea.Quit
 		}
 
@@ -200,13 +285,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if len(msg.areas) == 1 {
 			m.selectedArea = &msg.areas[0]
-			m.state = stateDone
-			return m, tea.Quit
+			return m.startStreaming()
 		}
 
 		m.areas = msg.areas
 		m.state = stateSelectingArea
 		return m, nil
+
+	case activateResultMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("activating area: %w", msg.err)
+			m.state = stateDone
+			return m, tea.Quit
+		}
+		m.state = stateConnecting
+		return m, connectCmd(m.selected.IP, m.username, m.clientkey, m.selectedArea.ID, m.selectedArea.ChannelIDs)
+
+	case connectResultMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("connecting: %w", msg.err)
+			m.state = stateStopping
+			return m, stopCmd(nil, m.selected.IP, m.username, m.selectedArea.ID)
+		}
+		m.streamer = msg.streamer
+		m.state = stateStreaming
+		return m, captureAndSendCmd(m.streamer)
+
+	case frameSentMsg:
+		if msg.err != nil {
+			m.streamErr = msg.err
+		} else {
+			m.lastColor = msg.color
+			m.frameCount++
+			m.streamErr = nil
+		}
+		return m, streamTickCmd()
+
+	case streamTickMsg:
+		if m.state == stateStreaming {
+			return m, captureAndSendCmd(m.streamer)
+		}
+		return m, nil
+
+	case stopDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		}
+		m.state = stateDone
+		return m, tea.Quit
 	}
 
 	switch m.state {
@@ -255,8 +381,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "enter":
 				m.selectedArea = &m.areas[m.areaCursor]
-				m.state = stateDone
-				return m, tea.Quit
+				return m.startStreaming()
 			}
 		}
 	}
@@ -316,19 +441,36 @@ func (m model) View() string {
 		s += "\n" + helpStyle.Render("  ↑/k up · ↓/j down · enter select · q quit") + "\n"
 		return s
 
+	case stateActivating:
+		return fmt.Sprintf("\n %s %s\n\n",
+			m.spinner.View(),
+			titleStyle.Render("Activating entertainment area..."))
+
+	case stateConnecting:
+		return fmt.Sprintf("\n %s %s\n\n",
+			m.spinner.View(),
+			titleStyle.Render("Connecting to bridge (DTLS)..."))
+
+	case stateStreaming:
+		s := "\n" + titleStyle.Render("  Streaming") + "\n\n"
+		s += fmt.Sprintf("  Bridge: %s\n", m.selected)
+		s += fmt.Sprintf("  Area:   %s\n", m.selectedArea)
+		s += fmt.Sprintf("  Color:  %s\n", m.lastColor)
+		s += fmt.Sprintf("  Frames: %d\n", m.frameCount)
+		if m.streamErr != nil {
+			s += errStyle.Render(fmt.Sprintf("  Error:  %s", m.streamErr)) + "\n"
+		}
+		s += "\n" + helpStyle.Render("  q quit") + "\n"
+		return s
+
+	case stateStopping:
+		return fmt.Sprintf("\n %s %s\n\n",
+			m.spinner.View(),
+			titleStyle.Render("Stopping..."))
+
 	case stateDone:
 		if m.err != nil {
 			return "\n" + errStyle.Render("  Error: "+m.err.Error()) + "\n\n"
-		}
-		var s string
-		if m.selected != nil {
-			s += fmt.Sprintf("\n  Bridge: %s\n", m.selected)
-		}
-		if m.selectedArea != nil {
-			s += fmt.Sprintf("  Area:   %s\n", m.selectedArea)
-		}
-		if s != "" {
-			return s + "\n"
 		}
 	}
 

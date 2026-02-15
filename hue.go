@@ -61,16 +61,16 @@ func PairBridge(ip net.IP) (username, clientkey string, err error) {
 
 // EntertainmentArea represents a Hue entertainment configuration.
 type EntertainmentArea struct {
-	ID       string
-	Name     string
-	Type     string
-	Status   string
-	Channels int
-	Lights   int
+	ID         string
+	Name       string
+	Type       string
+	Status     string
+	ChannelIDs []uint8
+	Lights     int
 }
 
 func (a EntertainmentArea) String() string {
-	return fmt.Sprintf("%s (%d channels, %d lights)", a.Name, a.Channels, a.Lights)
+	return fmt.Sprintf("%s (%d channels, %d lights)", a.Name, len(a.ChannelIDs), a.Lights)
 }
 
 // FetchEntertainmentAreas retrieves entertainment configurations from the bridge.
@@ -100,13 +100,21 @@ func FetchEntertainmentAreas(ip net.IP, username string) ([]EntertainmentArea, e
 
 	areas := make([]EntertainmentArea, len(result.Data))
 	for i, d := range result.Data {
+		channelIDs := make([]uint8, len(d.Channels))
+		for j, raw := range d.Channels {
+			var ch channelData
+			if err := json.Unmarshal(raw, &ch); err != nil {
+				return nil, fmt.Errorf("decoding channel %d: %w", j, err)
+			}
+			channelIDs[j] = ch.ChannelID
+		}
 		areas[i] = EntertainmentArea{
-			ID:       d.ID,
-			Name:     d.Metadata.Name,
-			Type:     d.ConfigurationType,
-			Status:   d.Status,
-			Channels: len(d.Channels),
-			Lights:   len(d.LightServices),
+			ID:         d.ID,
+			Name:       d.Metadata.Name,
+			Type:       d.ConfigurationType,
+			Status:     d.Status,
+			ChannelIDs: channelIDs,
+			Lights:     len(d.LightServices),
 		}
 	}
 
@@ -153,4 +161,8 @@ type entertainmentData struct {
 
 type entertainmentMeta struct {
 	Name string `json:"name"`
+}
+
+type channelData struct {
+	ChannelID uint8 `json:"channel_id"`
 }
