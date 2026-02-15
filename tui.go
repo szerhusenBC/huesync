@@ -25,6 +25,7 @@ const (
 	stateFetchingAreas
 	stateSelectingArea
 	stateInputDelay
+	stateInitCapture
 	stateActivating
 	stateConnecting
 	stateStreaming
@@ -65,6 +66,12 @@ type frameSentMsg struct {
 	startedAt time.Time
 }
 
+type captureInitMsg struct {
+	capturer Capturer
+	method   string
+	err      error
+}
+
 type stopDoneMsg struct {
 	err error
 }
@@ -86,6 +93,9 @@ type model struct {
 
 	delayInput   string
 	captureDelay time.Duration
+
+	capturer      Capturer
+	captureMethod string
 
 	streamer  *Streamer
 	lastColor RGB
@@ -162,14 +172,20 @@ func connectCmd(ip net.IP, username, clientkey, areaID string, channelIDs []uint
 	}
 }
 
-func captureAndSendCmd(s *Streamer) tea.Cmd {
+func initCaptureCmd() tea.Cmd {
+	return func() tea.Msg {
+		c, method, err := NewCapturer()
+		return captureInitMsg{capturer: c, method: method, err: err}
+	}
+}
+
+func captureAndSendCmd(s *Streamer, c Capturer) tea.Cmd {
 	return func() tea.Msg {
 		start := time.Now()
-		img, err := CaptureScreen()
+		color, err := c.CaptureColor()
 		if err != nil {
 			return frameSentMsg{err: err, startedAt: start}
 		}
-		color := AverageColor(img)
 		err = s.SendColor(color)
 		return frameSentMsg{color: color, err: err, startedAt: start}
 	}
@@ -181,11 +197,16 @@ func streamTickCmd(d time.Duration) tea.Cmd {
 	})
 }
 
-func stopCmd(s *Streamer, ip net.IP, username, areaID string) tea.Cmd {
+func stopCmd(s *Streamer, c Capturer, ip net.IP, username, areaID string) tea.Cmd {
 	return func() tea.Msg {
 		var firstErr error
+		if c != nil {
+			if err := c.Close(); err != nil {
+				firstErr = err
+			}
+		}
 		if s != nil {
-			if err := s.Close(); err != nil {
+			if err := s.Close(); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
@@ -197,8 +218,8 @@ func stopCmd(s *Streamer, ip net.IP, username, areaID string) tea.Cmd {
 }
 
 func (m model) startStreaming() (model, tea.Cmd) {
-	m.state = stateActivating
-	return m, activateCmd(m.selected.IP, m.username, m.selectedArea.ID)
+	m.state = stateInitCapture
+	return m, initCaptureCmd()
 }
 
 func (m model) enterDelayInput() (model, tea.Cmd) {
@@ -214,7 +235,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			if m.state == stateStreaming {
 				m.state = stateStopping
-				return m, stopCmd(m.streamer, m.selected.IP, m.username, m.selectedArea.ID)
+				return m, stopCmd(m.streamer, m.capturer, m.selected.IP, m.username, m.selectedArea.ID)
 			}
 			return m, tea.Quit
 		}
@@ -304,6 +325,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = stateSelectingArea
 		return m, nil
 
+	case captureInitMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("initializing screen capture: %w", msg.err)
+			m.state = stateDone
+			return m, tea.Quit
+		}
+		m.capturer = msg.capturer
+		m.captureMethod = msg.method
+		m.state = stateActivating
+		return m, activateCmd(m.selected.IP, m.username, m.selectedArea.ID)
+
 	case activateResultMsg:
 		if msg.err != nil {
 			m.err = fmt.Errorf("activating area: %w", msg.err)
@@ -317,11 +349,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = fmt.Errorf("connecting: %w", msg.err)
 			m.state = stateStopping
-			return m, stopCmd(nil, m.selected.IP, m.username, m.selectedArea.ID)
+			return m, stopCmd(nil, m.capturer, m.selected.IP, m.username, m.selectedArea.ID)
 		}
 		m.streamer = msg.streamer
 		m.state = stateStreaming
-		return m, captureAndSendCmd(m.streamer)
+		return m, captureAndSendCmd(m.streamer, m.capturer)
 
 	case frameSentMsg:
 		if msg.err != nil {
@@ -338,7 +370,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamTickMsg:
 		if m.state == stateStreaming {
-			return m, captureAndSendCmd(m.streamer)
+			return m, captureAndSendCmd(m.streamer, m.capturer)
 		}
 		return m, nil
 
@@ -481,6 +513,11 @@ func (m model) View() string {
 		s += "\n" + helpStyle.Render("  type a number · enter confirm · q quit") + "\n"
 		return s
 
+	case stateInitCapture:
+		return fmt.Sprintf("\n %s %s\n\n",
+			m.spinner.View(),
+			titleStyle.Render("Initializing screen capture..."))
+
 	case stateActivating:
 		return fmt.Sprintf("\n %s %s\n\n",
 			m.spinner.View(),
@@ -493,10 +530,11 @@ func (m model) View() string {
 
 	case stateStreaming:
 		s := "\n" + titleStyle.Render("  Streaming") + "\n\n"
-		s += fmt.Sprintf("  Bridge: %s\n", m.selected)
-		s += fmt.Sprintf("  Area:   %s\n", m.selectedArea)
-		s += fmt.Sprintf("  Delay:  %dms\n", m.captureDelay.Milliseconds())
-		s += fmt.Sprintf("  Color:  %s\n", m.lastColor)
+		s += fmt.Sprintf("  Bridge:  %s\n", m.selected)
+		s += fmt.Sprintf("  Area:    %s\n", m.selectedArea)
+		s += fmt.Sprintf("  Capture: %s\n", m.captureMethod)
+		s += fmt.Sprintf("  Delay:   %dms\n", m.captureDelay.Milliseconds())
+		s += fmt.Sprintf("  Color:   %s\n", m.lastColor)
 		if m.streamErr != nil {
 			s += errStyle.Render(fmt.Sprintf("  Error:  %s", m.streamErr)) + "\n"
 		}
