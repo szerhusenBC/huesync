@@ -1,7 +1,25 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 func main() {
-	fmt.Println("huesync")
+	p := tea.NewProgram(newModel())
+	result, err := p.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	m := result.(model)
+	if m.err != nil {
+		os.Exit(1)
+	}
+	if m.selected == nil {
+		os.Exit(0)
+	}
 }
