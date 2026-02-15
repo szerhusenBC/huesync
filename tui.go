@@ -170,7 +170,7 @@ func captureAndSendCmd(s *Streamer) tea.Cmd {
 }
 
 func streamTickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 		return streamTickMsg{}
 	})
 }
